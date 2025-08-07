@@ -20,6 +20,7 @@ namespace CustomControls.RJControls
 
         //Properties
         [Category("RJ Code Advance")]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
         public int BorderSize
         {
             get { return borderSize; }
@@ -31,6 +32,7 @@ namespace CustomControls.RJControls
         }
 
         [Category("RJ Code Advance")]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
         public int BorderRadius
         {
             get { return borderRadius; }
@@ -42,6 +44,7 @@ namespace CustomControls.RJControls
         }
 
         [Category("RJ Code Advance")]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
         public Color BorderColor
         {
             get { return borderColor; }
@@ -53,6 +56,7 @@ namespace CustomControls.RJControls
         }
 
         [Category("RJ Code Advance")]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
         public Color BackgroundColor
         {
             get { return this.BackColor; }
@@ -60,6 +64,7 @@ namespace CustomControls.RJControls
         }
 
         [Category("RJ Code Advance")]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
         public Color TextColor
         {
             get { return this.ForeColor; }

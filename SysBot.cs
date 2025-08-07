@@ -144,7 +144,7 @@ namespace SysbotMacro
             await Connection.SendAsync(new ArraySegment<byte>(command), SocketFlags.None);
         }
 
-        public byte[] PixelPeek()
+        public byte[]? PixelPeek()
         {
             // Original data in hexadecimal format
             byte[] hexData = SwitchCommand.PixelPeek();
@@ -195,36 +195,51 @@ namespace SysbotMacro
 
         public async Task ExecuteCommands(string commands, Func<bool> loopFunc, CancellationToken cancellationToken)
         {
-            var splitCommands = commands.TrimEnd().Split(' ');
+            if (string.IsNullOrWhiteSpace(commands))
+                return;
 
-            int defaultDelay = 100;  // Default delay after each command
+            var splitCommands = commands.TrimEnd().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            const int defaultDelay = 100;
+            int currentDelay = defaultDelay;
 
-            for (int i = 0; i < splitCommands.Length; i++)
+            try
             {
-                if (cancellationToken.IsCancellationRequested)
+                for (int i = 0; i < splitCommands.Length; i++)
                 {
-                    break;
-                }
-                var command = splitCommands[i];
+                    if (cancellationToken.IsCancellationRequested)
+                        break;
 
-                // If the command is followed by a "d" and a number, interpret it as a delay
-                if (i < splitCommands.Length - 2 && splitCommands[i + 1].StartsWith("d") && int.TryParse(splitCommands[i + 1].Substring(1), out var delay))
-                {
-                    await PressButton(command);
-                    await Task.Delay(delay);
-                    defaultDelay = delay;  // Update the default delay
-                    i++; // Skip the next item in the loop, since we've already processed it
+                    var command = splitCommands[i];
+
+                    if (i < splitCommands.Length - 1 && 
+                        splitCommands[i + 1].StartsWith("d") && 
+                        int.TryParse(splitCommands[i + 1].Substring(1), out var delay) && 
+                        delay > 0)
+                    {
+                        await PressButton(command);
+                        await Task.Delay(delay, cancellationToken);
+                        currentDelay = delay;
+                        i++; 
+                    }
+                    else
+                    {
+                        await PressButton(command);
+                        await Task.Delay(currentDelay, cancellationToken);
+                    }
                 }
-                else
+
+                if (loopFunc() && !cancellationToken.IsCancellationRequested)
                 {
-                    await PressButton(command);
-                    await Task.Delay(defaultDelay);  // Wait for the default delay
+                    await ExecuteCommands(commands, loopFunc, cancellationToken);
                 }
             }
-
-            if (loopFunc() && !cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException)
             {
-                await ExecuteCommands(commands, loopFunc, cancellationToken);
+                // Expected when cancellation is requested
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Error executing commands: {ex.Message}", ex);
             }
         }
 

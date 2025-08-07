@@ -24,6 +24,12 @@ namespace SysbotMacro
 {
     public partial class Form1 : Form
     {
+        private const int DEFAULT_SWITCH_PORT = 6000;
+        private const int DEFAULT_BUTTON_DELAY = 100;
+        private const int PING_TIMEOUT_MS = 2000;
+        private const int MAX_SWITCH_NAME_LENGTH = 50;
+        private const int DISCORD_BOT_DELAY = -1;
+        
         private bool canSaveData = false;
 
         // Declare the bots list that will be looped through when commands are sent.
@@ -35,10 +41,8 @@ namespace SysbotMacro
         private List<Dictionary<string, object>> ipDict = new List<Dictionary<string, object>>();
         private List<Dictionary<string, object>> macroDict = new List<Dictionary<string, object>>();
 
-
-
-
-        private DiscordBot _bot;
+        private DiscordBot? _bot;
+        private CancellationTokenSource? cancellationTokenSource;
 
 
 
@@ -90,9 +94,6 @@ namespace SysbotMacro
 
             File.WriteAllText("macroListView.json", JsonConvert.SerializeObject(macroDict));
         
-
-        //save discordTokenTB.text to a file
-        File.WriteAllText("discordTokenTB.json", JsonConvert.SerializeObject(discordTokenTB.Text));
 
             // Save userIDLV to a JSON file
             var userIDListViewData = new List<Dictionary<string, object>>();
@@ -213,15 +214,6 @@ namespace SysbotMacro
                 }
             }
 
-            // Load discordTokenTB.text from a file
-            if (File.Exists("discordTokenTB.json"))
-            {
-                var discordTokenTBDataJson = File.ReadAllText("discordTokenTB.json");
-                var discordTokenTBData = JsonConvert.DeserializeObject<string>(discordTokenTBDataJson);
-
-                discordTokenTB.Text = discordTokenTBData;
-            }
-
             canSaveData = true;
         }
 
@@ -249,7 +241,7 @@ namespace SysbotMacro
                 var config = new SwitchConnectionConfig
                 {
                     IP = ip,
-                    Port = 6000,
+                    Port = DEFAULT_SWITCH_PORT,
                     Protocol = SwitchProtocol.WiFi
                 };
 
@@ -581,52 +573,82 @@ namespace SysbotMacro
 
         private void addIpButton_Click(object sender, EventArgs e)
         {
-            string ipText = ipTextField.Text;
-            string switchName = switchNameTB.Text;
+            string ipText = ipTextField.Text?.Trim();
+            string switchName = switchNameTB.Text?.Trim();
 
-            if (string.IsNullOrEmpty(switchName))
+            if (string.IsNullOrWhiteSpace(switchName))
             {
-                UpdateLogger("Add a name for the switch");
+                UpdateLogger("Switch name cannot be empty");
                 return;
             }
 
-            if (!string.IsNullOrEmpty(ipText))
+            if (string.IsNullOrWhiteSpace(ipText))
             {
-                if (IPAddress.TryParse(ipText, out IPAddress address))
+                UpdateLogger("IP address cannot be empty");
+                return;
+            }
+
+            if (!IsValidIPAddress(ipText))
+            {
+                UpdateLogger("Invalid IP address format. Please enter a valid IPv4 address.");
+                return;
+            }
+
+            if (switchName.Length > MAX_SWITCH_NAME_LENGTH)
+            {
+                UpdateLogger($"Switch name is too long (max {MAX_SWITCH_NAME_LENGTH} characters)");
+                return;
+            }
+
+            ListViewItem existingItem = null;
+            foreach (ListViewItem item in ipListView.Items)
+            {
+                if (item.SubItems[1].Text.Equals(switchName, StringComparison.OrdinalIgnoreCase))
                 {
-                    ListViewItem existingItem = null;
-                    foreach (ListViewItem item in ipListView.Items)
-                    {
-                        if (item.SubItems[1].Text == switchName && item.SubItems[2].Text == ipText)
-                        {
-                            existingItem = item;
-                            break;
-                        }
-                    }
+                    existingItem = item;
+                    break;
+                }
+            }
 
-                    if (existingItem != null)
-                    {
-                        existingItem.SubItems[1].Text = switchName;
-                        existingItem.SubItems[2].Text = ipText;
-                    }
-                    else
-                    {
-                        ListViewItem newItem = new ListViewItem("");  // New ListViewItem for the first column checkbox nonsense
-                        newItem.SubItems.Add(switchName);
-                        newItem.SubItems.Add(ipText);
-                        ipListView.Items.Add(newItem);
-                        ipListView.Invalidate();
-                    }
-
-                    ipTextField.Clear();
-                    switchNameTB.Clear();
-                    SaveData();
+            try
+            {
+                if (existingItem != null)
+                {
+                    existingItem.SubItems[1].Text = switchName;
+                    existingItem.SubItems[2].Text = ipText;
+                    UpdateLogger($"Updated switch '{switchName}' with IP {ipText}");
                 }
                 else
                 {
-                    UpdateLogger("Invalid IP address format.");
+                    ListViewItem newItem = new ListViewItem("");
+                    newItem.SubItems.Add(switchName);
+                    newItem.SubItems.Add(ipText);
+                    ipListView.Items.Add(newItem);
+                    ipListView.Invalidate();
+                    UpdateLogger($"Added switch '{switchName}' with IP {ipText}");
                 }
+
+                ipTextField.Clear();
+                switchNameTB.Clear();
+                SaveData();
             }
+            catch (Exception ex)
+            {
+                UpdateLogger($"Error adding switch: {ex.Message}");
+            }
+        }
+
+        private bool IsValidIPAddress(string ipAddress)
+        {
+            if (!IPAddress.TryParse(ipAddress, out IPAddress address))
+                return false;
+
+            if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                return false;
+
+            string[] parts = ipAddress.Split('.');
+            return parts.Length == 4 && parts.All(part => 
+                int.TryParse(part, out int value) && value >= 0 && value <= 255);
         }
 
         private void deleteIpButton_Click(object sender, EventArgs e)
@@ -652,46 +674,60 @@ namespace SysbotMacro
             }
         }
 
-        private CancellationTokenSource cancellationTokenSource;
 
         private async void playbButton_Click(object sender, EventArgs e)
         {
-            bots.Clear();
-            //this was the best time to initialize bots.
-            InitializeBots();
-            if (textBox1.Text == "")
+            try
             {
-                UpdateLogger("No macro entered");
-                return;
-            }
-            if (loopCheckbox.Checked == true)
-            {
-                stopbButton.Enabled = true;
-                stopbButton.BackColor = Color.Aqua;
-                playbButton.Enabled = false;
-                UpdateLogger("Starting Macro Loop");
-               
-            }
-
-            cancellationTokenSource = new CancellationTokenSource(); // Create a new CancellationTokenSource that you call in the stop button code
-
-            string commands = textBox1.Text;
-            Func<bool> loopFunc = () => loopCheckbox.Checked;
-
-            foreach (var bot in bots)
-                try
+                bots.Clear();
+                InitializeBots();
+                
+                if (string.IsNullOrWhiteSpace(textBox1.Text))
                 {
-                    bot.Connect();
-                    await bot.ExecuteCommands(commands, loopFunc, cancellationTokenSource.Token);
-                    bot.Disconnect();
-                }
-                catch (Exception ex)
-                {
-                  
-                    UpdateLogger(ex.Message);
+                    UpdateLogger("No macro entered");
+                    return;
                 }
 
+                if (bots.Count == 0)
+                {
+                    UpdateLogger("No switches selected");
+                    return;
+                }
 
+                if (loopCheckbox.Checked)
+                {
+                    stopbButton.Enabled = true;
+                    stopbButton.BackColor = Color.Aqua;
+                    playbButton.Enabled = false;
+                    UpdateLogger("Starting Macro Loop");
+                }
+
+                cancellationTokenSource = new CancellationTokenSource();
+                string commands = textBox1.Text;
+                Func<bool> loopFunc = () => loopCheckbox.Checked;
+
+                foreach (var bot in bots)
+                {
+                    try
+                    {
+                        bot.Connect();
+                        await bot.ExecuteCommands(commands, loopFunc, cancellationTokenSource.Token);
+                        bot.Disconnect();
+                    }
+                    catch (Exception ex)
+                    {
+                        UpdateLogger($"Error executing commands on bot: {ex.Message}");
+                        try { bot.Disconnect(); } catch { }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                UpdateLogger($"Error in macro execution: {ex.Message}");
+                playbButton.Enabled = true;
+                stopbButton.Enabled = false;
+                stopbButton.BackColor = Color.White;
+            }
         }
 
         //stop button terminates the macro loop
@@ -745,83 +781,95 @@ namespace SysbotMacro
             UpdateLogger(msg);
         }
 
-        //Use to send any button to the list of selected IPs
         private async Task SendLiveButtonPress(string button)
         {
-            InitializeBots();
-            foreach (var bot in bots)
+            try
             {
-                try
+                InitializeBots();
+                
+                if (bots.Count == 0)
                 {
-                    bot.Connect();
-                    switch (button)
+                    UpdateLogger("No switches selected for live button press");
+                    return;
+                }
+
+                foreach (var bot in bots)
+                {
+                    try
                     {
-                        case "A":
-                            await bot.PressAButton();
-                            break;
-                        case "B":
-                            await bot.PressBButton();
-                            break;
-                        case "X":
-                            await bot.PressXButton();
-                            break;
-                        case "Y":
-                            await bot.PressYButton();
-                            break;
-                        case "L":
-                            await bot.PressLButton();
-                            break;
-                        case "R":
-                            await bot.PressRButton();
-                            break;
-                        case "ZL":
-                            await bot.PressZLButton();
-                            break;
-                        case "ZR":
-                            await bot.PressZRButton();
-                            break;
-                        case "Up":
-                            await bot.PressDPadUp();
-                            break;
-                        case "Down":
-                            await bot.PressDPadDown();
-                            break;
-                        case "Left":
-                            await bot.PressDPadLeft();
-                            break;
-                        case "Right":
-                            await bot.PressDPadRight();
-                            break;
-                        case "Plus":
-                            await bot.PressPlusButton();
-                            break;
-                        case "Minus":
-                            await bot.PressMinusButton();
-                            break;
-                        case "Home":
-                            await bot.PressHomeButton();
-                            break;
-                        case "Capture":
-                            await bot.PressCaptureButton();
-                            break;
-                        case "LStick":
-                            await bot.PressLeftStickButton();
-                            break;
-                        case "RStick":
-                            await bot.PressRightStickButton();
-                            break;
-                        
-                        
-                        // Add cases for the other buttons as needed...
-                        default:
-                            throw new ArgumentException("Invalid button string.");
+                        bot.Connect();
+                        switch (button)
+                        {
+                            case "A":
+                                await bot.PressAButton();
+                                break;
+                            case "B":
+                                await bot.PressBButton();
+                                break;
+                            case "X":
+                                await bot.PressXButton();
+                                break;
+                            case "Y":
+                                await bot.PressYButton();
+                                break;
+                            case "L":
+                                await bot.PressLButton();
+                                break;
+                            case "R":
+                                await bot.PressRButton();
+                                break;
+                            case "ZL":
+                                await bot.PressZLButton();
+                                break;
+                            case "ZR":
+                                await bot.PressZRButton();
+                                break;
+                            case "Up":
+                                await bot.PressDPadUp();
+                                break;
+                            case "Down":
+                                await bot.PressDPadDown();
+                                break;
+                            case "Left":
+                                await bot.PressDPadLeft();
+                                break;
+                            case "Right":
+                                await bot.PressDPadRight();
+                                break;
+                            case "Plus":
+                                await bot.PressPlusButton();
+                                break;
+                            case "Minus":
+                                await bot.PressMinusButton();
+                                break;
+                            case "Home":
+                                await bot.PressHomeButton();
+                                break;
+                            case "Capture":
+                                await bot.PressCaptureButton();
+                                break;
+                            case "LStick":
+                                await bot.PressLeftStickButton();
+                                break;
+                            case "RStick":
+                                await bot.PressRightStickButton();
+                                break;
+                            default:
+                                UpdateLogger($"Unknown button: {button}");
+                                return;
+                        }
+                        bot.Disconnect();
                     }
-                    bot.Disconnect();
+                    catch (Exception ex)
+                    {
+                        UpdateLogger($"Error pressing {button} on bot: {ex.Message}");
+                        try { bot.Disconnect(); } catch { }
+                    }
                 }
-                catch (Exception ex)
-                {
-                    UpdateLogger(ex.Message);
-                }
+            }
+            catch (Exception ex)
+            {
+                UpdateLogger($"Error in live button press: {ex.Message}");
             }
         }
 

@@ -12,7 +12,6 @@ using System.Net.NetworkInformation;
 using System.Text;
 using System.Net;
 using Newtonsoft.Json.Linq;
-using static LibUsbDotNet.Main.UsbTransferQueue;
 using System.Runtime.InteropServices;
 using System.IO;
 
@@ -21,6 +20,10 @@ namespace SysbotMacro.Discord
 {
     internal class MessageHandler
     {
+        private const int DEFAULT_SWITCH_PORT = 6000;
+        private const int PING_TIMEOUT_MS = 2000;
+        private const string COMMAND_PREFIX = "!";
+        
         private readonly List<Dictionary<string, object>> _ipDict;
         private readonly List<Dictionary<string, object>> _macroDict;
 
@@ -41,8 +44,8 @@ namespace SysbotMacro.Discord
             var firstPart = parts.FirstOrDefault();
 
 
-            // Check if the first word starts with '!'
-            if (firstPart != null && firstPart.StartsWith("!")) //edit the prefix here. Maybe i should add it to the form.
+            // Check if the first word starts with the command prefix
+            if (firstPart != null && firstPart.StartsWith(COMMAND_PREFIX))
             {
                 var command = firstPart.Substring(1); // Remove prefix
 
@@ -64,7 +67,7 @@ namespace SysbotMacro.Discord
                     var embed = new EmbedBuilder
                     {
                         Title = "Macro and Switch IP Data",
-                        Color = Color.Blue
+                        Color = global::Discord.Color.Blue
                     };
 
                     string macroField = "";
@@ -117,35 +120,44 @@ namespace SysbotMacro.Discord
                         return;
                     }
 
-                    Ping pingSender = new Ping();
-
-                    // Ping the IP addres.
-                    PingReply reply = await pingSender.SendPingAsync(switchIp, 2000);  // 2000 ms timeout
-
-                    // Check the status and if down, exit to prevent hanging
-                    if (reply.Status != IPStatus.Success)
+                    using (var pingSender = new Ping())
                     {
-                        await sendResponse($"Switch IP {switchIp} is not reachable");
-                        return;
-                    }
+                        // Ping the IP address
+                        PingReply reply = await pingSender.SendPingAsync(switchIp, PING_TIMEOUT_MS);
 
+                        // Check the status and if down, exit to prevent hanging
+                        if (reply.Status != IPStatus.Success)
+                        {
+                            await sendResponse($"Switch IP {switchIp} is not reachable");
+                            return;
+                        }
+                    }
 
                     // Execute
                     await sendResponse($"Executing macro {command} on Switch {switchKey}");
                     var config = new SwitchConnectionConfig
                     {
                         IP = switchIp,
-                        Port = 6000,
+                        Port = DEFAULT_SWITCH_PORT,
                         Protocol = SwitchProtocol.WiFi
                     };
 
                     var bot = new Bot(config);
-                    bot.Connect();
-                    var cancellationToken = new CancellationToken();  // not tied to anything yet...
-                    await bot.ExecuteCommands(macro, () => false, cancellationToken);  // not tied to anything yet... Should i?
-                    bot.Disconnect();
-
-                    await sendResponse($"Executed macro {command} on Switch {switchKey}");
+                    try
+                    {
+                        bot.Connect();
+                        var cancellationToken = new CancellationToken();
+                        await bot.ExecuteCommands(macro, () => false, cancellationToken);
+                        await sendResponse($"Executed macro {command} on Switch {switchKey}");
+                    }
+                    catch (Exception ex)
+                    {
+                        await sendResponse($"Error executing macro: {ex.Message}");
+                    }
+                    finally
+                    {
+                        try { bot.Disconnect(); } catch { }
+                    }
                 }
                 // command: to check the status of all switches
                 else if (command == "status")
@@ -159,14 +171,19 @@ namespace SysbotMacro.Discord
                         var ipAddress = switchDict.ContainsKey("IPAddress") ? switchDict["IPAddress"].ToString() : "Unknown";
 
                         // Initialize a new instance of the Ping class.
-                        Ping pingSender = new Ping();
-
-                        PingReply reply = await pingSender.SendPingAsync(ipAddress, 2000);  // 2000 ms timeout
-
-                        // Check the status.
-                        string status = reply.Status == IPStatus.Success ? "Up" : "Down";
-
-                        embedDescription.AppendLine($"Name: {switchName}, IP: {ipAddress}, Status: {status}");
+                        using (var pingSender = new Ping())
+                        {
+                            try
+                            {
+                                PingReply reply = await pingSender.SendPingAsync(ipAddress, PING_TIMEOUT_MS);
+                                string status = reply.Status == IPStatus.Success ? "Up" : "Down";
+                                embedDescription.AppendLine($"Name: {switchName}, IP: {ipAddress}, Status: {status}");
+                            }
+                            catch (Exception ex)
+                            {
+                                embedDescription.AppendLine($"Name: {switchName}, IP: {ipAddress}, Status: Error - {ex.Message}");
+                            }
+                        }
                     }
 
                     // Create embed message with Discord.Net's EmbedBuilder.
@@ -174,7 +191,7 @@ namespace SysbotMacro.Discord
                     {
                         Title = "Switch Status Check",
                         Description = embedDescription.ToString(),
-                        Color = Color.Green  // You can change the color based on your preferences.
+                        Color = global::Discord.Color.Green  // You can change the color based on your preferences.
                     };
 
                     // Send the embed.
@@ -206,39 +223,52 @@ namespace SysbotMacro.Discord
                     var config = new SwitchConnectionConfig
                     {
                         IP = switchIp,
-                        Port = 6000,
+                        Port = DEFAULT_SWITCH_PORT,
                         Protocol = SwitchProtocol.WiFi
                     };
                     var bot = new Bot(config);
-                    bot.Connect();
-                    byte[] imageBytes = bot.PixelPeek();
-                    System.IO.File.WriteAllBytes("test.jpg", imageBytes);
-                    string hexString = Encoding.UTF8.GetString(imageBytes);
-
-                    // Convert the hexadecimal string back to a byte array
-                    byte[] actualImageBytes = Enumerable.Range(0, hexString.Length)
-                                         .Where(x => x % 2 == 0)
-                                         .Select(x => Convert.ToByte(hexString.Substring(x, 2), 16))
-                                         .ToArray();
-
-                    // Write the byte array to a .jpg file
-                    System.IO.File.WriteAllBytes("test.jpg", actualImageBytes);
-
-                    // Send the image as an attachment in Discord
-                    if (actualImageBytes != null && actualImageBytes.Length > 0)
+                    try
                     {
-                        using (var stream = new MemoryStream(actualImageBytes))
+                        bot.Connect();
+                        byte[]? imageBytes = bot.PixelPeek();
+                        
+                        if (imageBytes == null || imageBytes.Length == 0)
                         {
-                            stream.Seek(0, SeekOrigin.Begin);
-                            var embed = new EmbedBuilder();
-                            embed.ImageUrl = "attachment://screenshot.jpg";
-                            Console.WriteLine($"Received {actualImageBytes.Length} bytes. First bytes: {actualImageBytes[0]} {actualImageBytes[1]} ...");
-                            await ((ISocketMessageChannel)message.Channel).SendFileAsync(stream, "screenshot.jpg", $"Here's the screenshot of {switchKey}", embed: embed.Build());
+                            await sendResponse("Failed to capture the screen - no data received.");
+                            return;
+                        }
+
+                        string hexString = Encoding.UTF8.GetString(imageBytes);
+
+                        // Convert the hexadecimal string back to a byte array
+                        byte[] actualImageBytes = Enumerable.Range(0, hexString.Length)
+                                             .Where(x => x % 2 == 0)
+                                             .Select(x => Convert.ToByte(hexString.Substring(x, 2), 16))
+                                             .ToArray();
+
+                        // Send the image as an attachment in Discord
+                        if (actualImageBytes.Length > 0)
+                        {
+                            using (var stream = new MemoryStream(actualImageBytes))
+                            {
+                                stream.Seek(0, SeekOrigin.Begin);
+                                var embed = new EmbedBuilder();
+                                embed.ImageUrl = "attachment://screenshot.jpg";
+                                await ((ISocketMessageChannel)message.Channel).SendFileAsync(stream, "screenshot.jpg", $"Here's the screenshot of {switchKey}", embed: embed.Build());
+                            }
+                        }
+                        else
+                        {
+                            await sendResponse("Failed to process screen capture data.");
                         }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        await sendResponse("Failed to capture the screen.");
+                        await sendResponse($"Error capturing screenshot: {ex.Message}");
+                    }
+                    finally
+                    {
+                        try { bot.Disconnect(); } catch { }
                     }
 
 

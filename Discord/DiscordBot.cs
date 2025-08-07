@@ -8,16 +8,16 @@ namespace SysbotMacro.Discord
 {
     internal class DiscordBot
     {
-        string _token;
-        public Action<string> LogAction { get; set; }
+        private readonly string _token;
+        public Action<string>? LogAction { get; set; }
 
-        private DiscordSocketClient _client;
+        private DiscordSocketClient? _client;
         private readonly List<ulong> _sudoUserIds;
         private readonly List<ulong> _channelIds;
         private readonly List<Dictionary<string, object>> _ipDict;
         private readonly List<Dictionary<string, object>> _macroDict;
 
-        private MessageHandler _messageHandler;
+        private readonly MessageHandler _messageHandler;
 
         public DiscordBot(string token, List<ulong> sudos, List<ulong> channelids, List<Dictionary<string, object>> ipDict, List<Dictionary<string, object>> macroDict)
         {
@@ -40,6 +40,8 @@ namespace SysbotMacro.Discord
 
         public async Task MainAsync()
         {
+            if (_client == null) return;
+            
             _client.Log += LogAsync;
             _client.MessageReceived += MessageReceivedAsync;
 
@@ -84,8 +86,11 @@ namespace SysbotMacro.Discord
         //call to stop the bot
         public async Task StopAsync()
         {
-            await _client.LogoutAsync();
-            await _client.StopAsync();
+            if (_client != null)
+            {
+                await _client.LogoutAsync();
+                await _client.StopAsync();
+            }
         }
     }
 }
