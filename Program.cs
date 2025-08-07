@@ -13,6 +13,12 @@ namespace SysbotMacro
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            
+            using (LoadingScreen loadingScreen = new LoadingScreen())
+            {
+                loadingScreen.ShowDialog();
+            }
+            
             Application.Run(new Form1());
         }
     }
